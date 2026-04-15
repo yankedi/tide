@@ -11,7 +11,7 @@ if [ -z "$NDK_DIR" ] || [ -z "$ABI" ]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TALLOC_VER="2.1.14"
+TALLOC_VER="2.3.4"
 TALLOC_SRC_DIR="$ROOT_DIR/talloc-${TALLOC_VER}"
 STATIC_ROOT="$ROOT_DIR/static-${ABI}"
 PROOT_SRC_DIR="$ROOT_DIR/proot-src"
@@ -38,7 +38,7 @@ export OBJDUMP="$TOOLCHAIN/bin/llvm-objdump"
 mkdir -p "$STATIC_ROOT/lib" "$STATIC_ROOT/include"
 
 # ============================================================
-# 1. 下载 Talloc 2.1.14（和 green-green-avk 一致）
+# 1. 下载 Talloc
 # ============================================================
 if [ ! -d "$TALLOC_SRC_DIR" ]; then
     echo "Downloading Talloc ${TALLOC_VER}..."
@@ -49,7 +49,7 @@ if [ ! -d "$TALLOC_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 2. 编译 libtalloc.a（直接照抄 green-green-avk/make-talloc-static.sh）
+# 2. 编译 libtalloc.a
 # ============================================================
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_SRC_DIR"
@@ -102,7 +102,7 @@ if [ ! -d "$PROOT_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 4. 编译 PRoot（照抄 make-proot.sh）
+# 4. 编译 PRoot
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
