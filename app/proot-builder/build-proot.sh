@@ -37,9 +37,8 @@ esac
 export AR="$TOOLCHAIN/bin/llvm-ar"
 export CC="$TOOLCHAIN/bin/${TARGET_TRIPLE}${API_LEVEL}-clang"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
-# proot GNUmakefile 用 OBJCOPY 把 loader.exe 转成 .o，
-# host 的 objcopy 不认识 Android ELF 架构，必须用 NDK 的 llvm-objcopy
 export OBJCOPY="$TOOLCHAIN/bin/llvm-objcopy"
+export OBJDUMP="$TOOLCHAIN/bin/llvm-objdump"
 
 mkdir -p "$STATIC_ROOT/lib" "$STATIC_ROOT/include"
 
@@ -110,41 +109,66 @@ fi
 # ============================================================
 # 4. 编译 PRoot
 #
-# NDK 的 llvm-objdump 输出的格式字符串是 "elf64-little" 之类 LLVM 风格，
-# 而 llvm-objcopy --output-target 需要 GNU 风格（如 "elf64-aarch64"）。
-# 所以在 make 前直接用 sed patch GNUmakefile，
-# 把动态探测的 \$(shell objdump...) 替换为硬编码的 GNU ELF 格式名。
+# NDK llvm-objdump 输出 LLVM 风格的格式名（elf64-little），
+# 但 llvm-objcopy --output-target 需要 GNU 风格（elf64-aarch64）。
+# GNUmakefile 里用 \$(shell objdump ...) 动态探测格式，就会拿到错误的字符串。
+# 修复方式：直接将 objcopy 调用中的 --output-target= 后面这段
+# \$(shell LANG=C ...) 字面替换掉。
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
 
-# Patch GNUmakefile: 替换 objdump 格式探测为硬编码值
-# 匹配两处 \$(shell ... objdump ... loader[-m32] ...)
-# 并分别替换为 $OBJCOPY_FMT 和 $OBJCOPY_FMT_M32
-python3 - <<PYEOF
-import re, sys
+# 先打印原始 objcopy 相关行，帮助调试
+echo "--- GNUmakefile objcopy lines (before patch) ---"
+grep -n 'objcopy\|OBJCOPY\|output-target\|file format' GNUmakefile || true
+echo "---"
+
+# 用 python3 逻行替换：
+# 对于包含 --output-target= 的行，将其中的 \$(shell...) 或 \$(... objdump ...) 次展开
+# 替换为硬编码的 GNU ELF 格式名。
+# 策略：如果行内含 m32 相关关键词，用 M32 格式；否则用主格式。
+python3 - "${OBJCOPY_FMT}" "${OBJCOPY_FMT_M32}" <<'PYEOF'
+import sys, re
+
+fmt      = sys.argv[1]   # e.g. elf64-aarch64
+fmt_m32  = sys.argv[2]   # e.g. elf32-littlearm
 
 with open('GNUmakefile', 'r') as f:
-    content = f.read()
+    lines = f.readlines()
 
-# 匹配类似: \$(shell LANG=C \$(OBJDUMP) -f \$(firstword \$(LOADER_OBJS)) | grep ... | awk ...)
-# 注意: 不同版本可能用 LOADER_OBJS 或 LOADER_M32_OBJS
-content = re.sub(
-    r'\\\$\(shell[^)]*LOADER_M32_OBJS[^)]*\)',
-    '${OBJCOPY_FMT_M32}',
-    content
-)
-content = re.sub(
-    r'\\\$\(shell[^)]*LOADER_OBJS[^)]*\)',
-    '${OBJCOPY_FMT}',
-    content
-)
+out = []
+for line in lines:
+    # 只处理包含 --output-target 的行
+    if '--output-target' in line:
+        # 判断是 m32 还是主 loader
+        is_m32 = 'm32' in line.lower() or 'M32' in line
+        target = fmt_m32 if is_m32 else fmt
+        # 替换 --output-target=\$(shell ...) 或 --output-target \$(shell ...)
+        # 支持带等号和不带等号两种写法
+        line = re.sub(
+            r'--output-target[= ]\$\(shell[^)]*\)',
+            f'--output-target={target}',
+            line
+        )
+        # 如果 shell 子命令跨行（尾部展展的 shell 表达式），
+        # 用更宿的方式: 将整个 --output-target=... 参数直接替换
+        if '$(shell' in line and '--output-target' in line:
+            line = re.sub(
+                r'--output-target[=\s]+\S+',
+                f'--output-target={target}',
+                line
+            )
+    out.append(line)
 
 with open('GNUmakefile', 'w') as f:
-    f.write(content)
+    f.writelines(out)
 
 print('GNUmakefile patched OK')
 PYEOF
+
+echo "--- GNUmakefile objcopy lines (after patch) ---"
+grep -n 'objcopy\|OBJCOPY\|output-target\|file format' GNUmakefile || true
+echo "---"
 
 PROOT_CFLAGS="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE \
     -I. -I./ \
@@ -158,7 +182,8 @@ echo "Running make..."
 make V=1 -j$(nproc) proot \
     CFLAGS="$PROOT_CFLAGS" \
     LDFLAGS="-L$STATIC_ROOT/lib" \
-    OBJCOPY="$OBJCOPY"
+    OBJCOPY="$OBJCOPY" \
+    OBJDUMP="$OBJDUMP"
 
 "$STRIP" proot
 
