@@ -1,5 +1,5 @@
 #!/bin/bash
-# 完全照抄 green-green-avk/build-proot-android 思路
+# 照抄 green-green-avk/build-proot-android
 set -euo pipefail
 
 NDK_DIR=$1
@@ -20,10 +20,10 @@ API_LEVEL=21
 TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
 
 case $ABI in
-    "arm64-v8a")  TARGET_TRIPLE=aarch64-linux-android ;;
+    "arm64-v8a")   TARGET_TRIPLE=aarch64-linux-android ;;
     "armeabi-v7a") TARGET_TRIPLE=armv7a-linux-androideabi ;;
-    "x86_64")     TARGET_TRIPLE=x86_64-linux-android ;;
-    "x86")        TARGET_TRIPLE=i686-linux-android ;;
+    "x86_64")      TARGET_TRIPLE=x86_64-linux-android ;;
+    "x86")         TARGET_TRIPLE=i686-linux-android ;;
     *) echo "Unknown ABI: $ABI"; exit 1 ;;
 esac
 
@@ -50,15 +50,14 @@ fi
 
 # ============================================================
 # 2. 编译 libtalloc.a
-# talloc 用的是 waf，不是 make。
-# 不能用 configure build（那会进入 build 子目录然后 build+test），
-# 应该先 configure，再单独调用 waf build 只编译主库。
+# 完全照抄 green-green-avk/make-talloc-static.sh：
+#   ./configure build  (这是 talloc 的 wrapper，build 是传给内部 waf 的参数)
+#   $AR rcs libtalloc.a bin/default/talloc*.o
 # ============================================================
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_SRC_DIR"
 
-# talloc 用 waf distclean
-buildtools/bin/waf distclean || true
+./configure distclean || true
 
 cat > cross-answers.txt << 'EOF'
 Checking uname sysname type: "Linux"
@@ -85,20 +84,18 @@ EOF
 
 export CFLAGS="-fPIE -O2"
 
-# configure 只配置，不需要提供子命令
-buildtools/bin/waf configure \
+# 直接照抄 green-green-avk 的写法：./configure build ...
+./configure build \
     "--prefix=$STATIC_ROOT" \
     --disable-rpath \
     --disable-python \
     --cross-compile \
     "--cross-answers=$TALLOC_SRC_DIR/cross-answers.txt"
 
-# 单独 build，不跑测试
-buildtools/bin/waf build --targets=talloc
-
+# 手动打包成静态库（和 green-green-avk 完全相同）
 "$AR" rcs "$STATIC_ROOT/lib/libtalloc.a" bin/default/talloc*.o
 cp -f talloc.h "$STATIC_ROOT/include/"
-echo "libtalloc.a built OK -> $STATIC_ROOT/lib/libtalloc.a"
+echo "libtalloc.a built OK"
 
 # ============================================================
 # 3. 下载 PRoot
@@ -110,7 +107,7 @@ if [ ! -d "$PROOT_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 4. 编译 PRoot
+# 4. 编译 PRoot（照抄 make-proot.sh）
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
