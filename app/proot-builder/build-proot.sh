@@ -1,7 +1,5 @@
 #!/bin/bash
-# 完全照抄 green-green-avk/build-proot-android 思路：
-# - talloc 用 ./configure --cross-compile 正经交叉编译，不用 replace.h 黑魔法
-# - proot 直接 make，不需要任何 sed 补丁
+# 完全照抄 green-green-avk/build-proot-android 思路
 set -euo pipefail
 
 NDK_DIR=$1
@@ -18,29 +16,15 @@ TALLOC_SRC_DIR="$ROOT_DIR/talloc-${TALLOC_VER}"
 STATIC_ROOT="$ROOT_DIR/static-${ABI}"
 PROOT_SRC_DIR="$ROOT_DIR/proot-src"
 
-# ============================================================
-# 工具链设置
-# ============================================================
 API_LEVEL=21
 TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
 
 case $ABI in
-    "arm64-v8a")
-        TARGET_TRIPLE=aarch64-linux-android
-        ;;
-    "armeabi-v7a")
-        TARGET_TRIPLE=armv7a-linux-androideabi
-        ;;
-    "x86_64")
-        TARGET_TRIPLE=x86_64-linux-android
-        ;;
-    "x86")
-        TARGET_TRIPLE=i686-linux-android
-        ;;
-    *)
-        echo "Unknown ABI: $ABI"
-        exit 1
-        ;;
+    "arm64-v8a")  TARGET_TRIPLE=aarch64-linux-android ;;
+    "armeabi-v7a") TARGET_TRIPLE=armv7a-linux-androideabi ;;
+    "x86_64")     TARGET_TRIPLE=x86_64-linux-android ;;
+    "x86")        TARGET_TRIPLE=i686-linux-android ;;
+    *) echo "Unknown ABI: $ABI"; exit 1 ;;
 esac
 
 export AR="$TOOLCHAIN/bin/llvm-ar"
@@ -51,8 +35,7 @@ export STRIP="$TOOLCHAIN/bin/llvm-strip"
 export OBJCOPY="$TOOLCHAIN/bin/llvm-objcopy"
 export OBJDUMP="$TOOLCHAIN/bin/llvm-objdump"
 
-mkdir -p "$STATIC_ROOT/lib"
-mkdir -p "$STATIC_ROOT/include"
+mkdir -p "$STATIC_ROOT/lib" "$STATIC_ROOT/include"
 
 # ============================================================
 # 1. 下载 Talloc
@@ -67,11 +50,15 @@ fi
 
 # ============================================================
 # 2. 编译 libtalloc.a
+# talloc 用的是 waf，不是 make。
+# 不能用 configure build（那会进入 build 子目录然后 build+test），
+# 应该先 configure，再单独调用 waf build 只编译主库。
 # ============================================================
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_SRC_DIR"
 
-make distclean || true
+# talloc 用 waf distclean
+buildtools/bin/waf distclean || true
 
 cat > cross-answers.txt << 'EOF'
 Checking uname sysname type: "Linux"
@@ -97,13 +84,17 @@ Checking for HAVE_IFACE_IFCONF: FAIL
 EOF
 
 export CFLAGS="-fPIE -O2"
-./configure build \
+
+# configure 只配置，不需要提供子命令
+buildtools/bin/waf configure \
     "--prefix=$STATIC_ROOT" \
     --disable-rpath \
     --disable-python \
-    --disable-tests \
     --cross-compile \
     "--cross-answers=$TALLOC_SRC_DIR/cross-answers.txt"
+
+# 单独 build，不跑测试
+buildtools/bin/waf build --targets=talloc
 
 "$AR" rcs "$STATIC_ROOT/lib/libtalloc.a" bin/default/talloc*.o
 cp -f talloc.h "$STATIC_ROOT/include/"
@@ -119,7 +110,7 @@ if [ ! -d "$PROOT_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 4. 编译 PRoot（不需要任何 sed 补丁）
+# 4. 编译 PRoot
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
