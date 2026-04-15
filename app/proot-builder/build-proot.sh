@@ -11,7 +11,7 @@ if [ -z "$NDK_DIR" ] || [ -z "$ABI" ]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TALLOC_VER="2.3.4"
+TALLOC_VER="2.4.2"
 TALLOC_SRC_DIR="$ROOT_DIR/talloc-${TALLOC_VER}"
 STATIC_ROOT="$ROOT_DIR/static-${ABI}"
 PROOT_SRC_DIR="$ROOT_DIR/proot-src"
@@ -29,8 +29,6 @@ esac
 
 export AR="$TOOLCHAIN/bin/llvm-ar"
 export CC="$TOOLCHAIN/bin/${TARGET_TRIPLE}${API_LEVEL}-clang"
-export CXX="$TOOLCHAIN/bin/${TARGET_TRIPLE}${API_LEVEL}-clang++"
-export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 export OBJCOPY="$TOOLCHAIN/bin/llvm-objcopy"
 export OBJDUMP="$TOOLCHAIN/bin/llvm-objdump"
@@ -49,46 +47,23 @@ if [ ! -d "$TALLOC_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 2. 编译 libtalloc.a
+# 2. 手动编译 talloc.c 一个文件，完全绕开 waf / configure / 测试
+# talloc.c 是自包含的，只需要 -I. 就能独立编译
 # ============================================================
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_SRC_DIR"
 
-./configure distclean || true
+"$CC" \
+    -fPIE -O2 \
+    -D_FILE_OFFSET_BITS=64 \
+    -D_GNU_SOURCE \
+    -DTALLOC_BUILD_VERSION_MAJOR=2 \
+    -DTALLOC_BUILD_VERSION_MINOR=4 \
+    -DTALLOC_BUILD_VERSION_RELEASE=2 \
+    -I. \
+    -c talloc.c -o talloc.o
 
-cat > cross-answers.txt << 'EOF'
-Checking uname sysname type: "Linux"
-Checking uname machine type: "dontcare"
-Checking uname release type: "dontcare"
-Checking uname version type: "dontcare"
-Checking simple C program: OK
-rpath library support: OK
--Wl,--version-script support: FAIL
-Checking getconf LFS_CFLAGS: OK
-Checking for large file support without additional flags: OK
-Checking for -D_FILE_OFFSET_BITS=64: OK
-Checking for -D_LARGE_FILES: OK
-Checking correct behavior of strtoll: OK
-Checking for working strptime: OK
-Checking for C99 vsnprintf: OK
-Checking for HAVE_SHARED_MMAP: OK
-Checking for HAVE_MREMAP: OK
-Checking for HAVE_INCOHERENT_MMAP: OK
-Checking for HAVE_SECURE_MKSTEMP: OK
-Checking getconf large file support flags work: OK
-Checking for HAVE_IFACE_IFCONF: FAIL
-EOF
-
-export CFLAGS="-fPIE -O2"
-
-./configure build \
-    "--prefix=$STATIC_ROOT" \
-    --disable-rpath \
-    --disable-python \
-    --cross-compile \
-    "--cross-answers=$TALLOC_SRC_DIR/cross-answers.txt"
-
-"$AR" rcs "$STATIC_ROOT/lib/libtalloc.a" bin/default/talloc*.o
+"$AR" rcs "$STATIC_ROOT/lib/libtalloc.a" talloc.o
 cp -f talloc.h "$STATIC_ROOT/include/"
 echo "libtalloc.a built OK"
 
