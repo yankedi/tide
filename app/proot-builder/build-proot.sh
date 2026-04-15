@@ -98,19 +98,27 @@ fi
 
 # ============================================================
 # 4. 编译 PRoot
-# 去掉 -Werror=implicit-function-declaration：
-# proot 源码（ashmem_memfd.c 等）缺少部分 #include，NDK r27 严格模式下会报错
+#
+# proot 的 GNUmakefile 自己就会拼入 CFLAGS，所以要用 make 的
+# 命令行覆盖变量而不是光设环境变量。
+# -Wno-error=implicit-function-declaration 覆盖 NDK r27 的默认行为，
+# 消除 ashmem_memfd.c 等缺少 #include <string.h> 引起的编译错误。
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
 
-export CFLAGS="-I$STATIC_ROOT/include"
-export LDFLAGS="-L$STATIC_ROOT/lib"
+PROOT_CFLAGS="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE \
+    -I. -I./ \
+    -I$STATIC_ROOT/include \
+    -Wall -Wextra -O2 -MD \
+    -Wno-error=implicit-function-declaration"
 
 make distclean || true
 
 echo "Running make..."
-make V=1 -j$(nproc) proot
+make V=1 -j$(nproc) proot \
+    CFLAGS="$PROOT_CFLAGS" \
+    LDFLAGS="-L$STATIC_ROOT/lib"
 
 "$STRIP" proot
 
