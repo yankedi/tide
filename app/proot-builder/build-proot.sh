@@ -95,24 +95,26 @@ if [ ! -d "$PROOT_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 3. 【关键】打补丁 —— 必须在 make distclean 之前！
-#
-# GNUmakefile 在解析阶段会执行：
-#   $(CC) -E -dM arch.h | grep HAS_LOADER_32BIT
-# 来决定是否编译 assembly-m32.o。
-# 因此必须在 make 读取 Makefile 之前就把 arch.h 改好。
+# 3. 打补丁 —— 必须在 make distclean 之前
 # ============================================================
-echo "Patching arch.h to disable 32-bit loader..."
+echo "Patching proot sources..."
+
+# 补丁 A：禁用 32 位 loader（必须在 make 读 Makefile 之前）
 sed -i 's/#define HAS_LOADER_32BIT true/#define HAS_LOADER_32BIT false/' \
     "$PROOT_SRC_DIR/src/arch.h"
+grep -q 'HAS_LOADER_32BIT false' "$PROOT_SRC_DIR/src/arch.h" \
+    && echo "  [OK] arch.h: HAS_LOADER_32BIT -> false" \
+    || { echo "  [FAIL] arch.h patch failed!"; exit 1; }
 
-# 验证补丁是否生效
-if grep -q 'HAS_LOADER_32BIT false' "$PROOT_SRC_DIR/src/arch.h"; then
-    echo "  [OK] arch.h patched successfully"
-else
-    echo "  [WARN] patch may not have applied, checking..."
-    grep 'HAS_LOADER_32BIT' "$PROOT_SRC_DIR/src/arch.h" || true
-fi
+# 补丁 B：修正 loader.c 中 basename 与 NDK string.h 的冲突
+# NDK r27 的 string.h 已包含公共 basename 声明，而 loader.c
+# 里面局部定义了同名 static inline 函数。
+# 解决：把 loader.c 里的 basename 改名为 proot_loader_basename
+sed -i 's/\bbasename\b/proot_loader_basename/g' \
+    "$PROOT_SRC_DIR/src/loader/loader.c"
+grep -q 'proot_loader_basename' "$PROOT_SRC_DIR/src/loader/loader.c" \
+    && echo "  [OK] loader.c: basename -> proot_loader_basename" \
+    || { echo "  [FAIL] loader.c patch failed!"; exit 1; }
 
 # ============================================================
 # 4. 编译 PRoot
@@ -120,7 +122,6 @@ fi
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
 
-# distclean 在补丁之后，不会动 arch.h
 make distclean || true
 
 echo '#define VERSION "v5.1.107-static"' > build.h
@@ -128,10 +129,12 @@ echo '#define HAVE_PROCESS_VM 1' >> build.h
 echo '#define HAVE_SECCOMP_FILTER 1' >> build.h
 
 echo "Running make..."
+# 注意：-include replace.h 只放在 CFLAGS 里（对 .c 文件）
+# .S 汇编文件不能用 -include C 头文件，否则会把头文件内容当汇编语句解析
 make -j$(nproc) \
     CC="$CC" LD="$CC" AR="$AR" STRIP="$STRIP" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
-    CPPFLAGS="-I$TALLOC_DIR -I. -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -include $TALLOC_DIR/replace.h" \
-    CFLAGS="-static -fPIE -O2 $PROOT_ARCH" \
+    CPPFLAGS="-I$TALLOC_DIR -I. -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE" \
+    CFLAGS="-static -fPIE -O2 $PROOT_ARCH -include $TALLOC_DIR/replace.h" \
     LDFLAGS="-static -L$TALLOC_DIR" \
     proot
 
