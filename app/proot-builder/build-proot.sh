@@ -29,6 +29,9 @@ esac
 export AR="$TOOLCHAIN/bin/llvm-ar"
 export CC="$TOOLCHAIN/bin/${TARGET_TRIPLE}${API_LEVEL}-clang"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
+# proot GNUmakefile 用 OBJCOPY 把 loader.exe 转成 .o，
+# host 的 objcopy 不认识 Android ELF 架构，必须用 NDK 的 llvm-objcopy
+export OBJCOPY="$TOOLCHAIN/bin/llvm-objcopy"
 
 mkdir -p "$STATIC_ROOT/lib" "$STATIC_ROOT/include"
 
@@ -99,10 +102,7 @@ fi
 # ============================================================
 # 4. 编译 PRoot
 #
-# proot 的 GNUmakefile 自己就会拼入 CFLAGS，所以要用 make 的
-# 命令行覆盖变量而不是光设环境变量。
-# -Wno-error=implicit-function-declaration 覆盖 NDK r27 的默认行为，
-# 消除 ashmem_memfd.c 等缺少 #include <string.h> 引起的编译错误。
+# 命令行覆盖 CFLAGS/OBJCOPY，优先级高于 Makefile 内部赋居。
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
@@ -118,7 +118,8 @@ make distclean || true
 echo "Running make..."
 make V=1 -j$(nproc) proot \
     CFLAGS="$PROOT_CFLAGS" \
-    LDFLAGS="-L$STATIC_ROOT/lib"
+    LDFLAGS="-L$STATIC_ROOT/lib" \
+    OBJCOPY="$OBJCOPY"
 
 "$STRIP" proot
 
