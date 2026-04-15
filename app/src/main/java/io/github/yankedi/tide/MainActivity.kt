@@ -49,16 +49,12 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import android.system.Os
 import android.system.OsConstants
-import org.apache.commons.compress.archivers.ar.ArArchiveInputStream
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 
 lateinit var PREFIX: String
 lateinit var HOME: String
@@ -78,7 +74,7 @@ class MainActivity : ComponentActivity() {
         HOME = File(filesDir, "home").absolutePath
         File(HOME).mkdirs()
         File(PREFIX).mkdirs()
-        
+
         checkStoragePermission()
         val hasInternet = checkSelfPermission(Manifest.permission.INTERNET) == PackageManager.PERMISSION_GRANTED
         android.util.Log.d("Tide", "Has internet permission: $hasInternet")
@@ -143,18 +139,18 @@ fun MainScreen(viewModel: TerminalViewModel = viewModel()) {
                 TextButton(
                     onClick = { viewModel.sendCommand("git status") },
                     shape = RoundedCornerShape(12.dp),
-                    ){
+                ){
                     Text("Git")
                 }
                 TextButton(
                     onClick = { viewModel.sendCommand("./run.sh") },
                     shape = RoundedCornerShape(12.dp),
-                    ){
+                ){
                     Text("Run")
                 }
-                
+
                 Spacer(Modifier.weight(1f))
-                
+
                 Text(
                     text = if (hasInternet) "Online" else "Offline",
                     style = MaterialTheme.typography.labelSmall,
@@ -187,11 +183,9 @@ fun checkEnvironment(): Boolean {
 
         withContext(Dispatchers.IO) {
             try {
-                val client = OkHttpClient()
-                val abi = Build.SUPPORTED_ABIS[0]
-                
-                // 1. 获取 bootstrap
+                // 1. 获取最新 Release
                 if (!shFile.exists()) {
+                    val client = OkHttpClient()
                     val request = Request.Builder()
                         .url("https://api.github.com/repos/termux/termux-packages/releases/latest")
                         .build()
@@ -201,6 +195,7 @@ fun checkEnvironment(): Boolean {
                     val json = JSONObject(jsonBody)
                     val assets = json.getJSONArray("assets")
 
+                    val abi = Build.SUPPORTED_ABIS[0]
                     val targetName = when {
                         abi.contains("arm64") || abi.contains("aarch64") -> "bootstrap-aarch64.zip"
                         abi.contains("armeabi") || abi.contains("arm") -> "bootstrap-arm.zip"
@@ -217,34 +212,52 @@ fun checkEnvironment(): Boolean {
                         }
                     }
 
-                    if (downloadUrl.isNotEmpty()) {
-                        val downloadFile = File(context.cacheDir, "bootstrap.zip")
-                        downloadFile(client, downloadUrl, downloadFile) { progress ->
-                            state = InitState.Downloading(progress * 0.8f) // 占 80%
+                    if (downloadUrl.isEmpty()) throw Exception("No bootstrap found for $abi")
+
+                    // 2. 下载
+                    val downloadFile = File(context.cacheDir, "bootstrap.zip")
+                    val downloadRequest = Request.Builder().url(downloadUrl).build()
+                    client.newCall(downloadRequest).execute().use { downloadResponse ->
+                        val body = downloadResponse.body ?: throw Exception("Download failed")
+                        val totalSize = body.contentLength()
+                        body.byteStream().use { input ->
+                            FileOutputStream(downloadFile).use { output ->
+                                val buffer = ByteArray(8192)
+                                var read: Int
+                                var downloaded = 0L
+                                while (input.read(buffer).also { read = it } != -1) {
+                                    output.write(buffer, 0, read)
+                                    downloaded += read
+                                    state = InitState.Downloading(if (totalSize > 0) downloaded.toFloat() / totalSize else 0f)
+                                }
+                            }
                         }
-                        state = InitState.Extracting
-                        unzip(downloadFile, usrDir)
-                        downloadFile.delete()
                     }
+
+                    // 3. 解压
+                    state = InitState.Extracting
+                    unzip(downloadFile, usrDir)
+                    downloadFile.delete()
                 }
 
-                // 2. 获取 proot (从 Assets 提取静态编译的版本)
+                // 4. 仅提取 proot，不影响 sh
                 if (!prootFile.exists()) {
                     state = InitState.Extracting
                     val abi = Build.SUPPORTED_ABIS[0]
-                    val assetPath = "bin/$abi/proot"
-                    
-                    try {
-                        context.assets.open(assetPath).use { input ->
-                            prootFile.parentFile?.mkdirs()
-                            FileOutputStream(prootFile).use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        Os.chmod(prootFile.absolutePath, 448) // 700
-                    } catch (e: Exception) {
-                        throw Exception("Failed to extract proot for ABI $abi from assets. Did you build the native project?")
+                    val assetAbiDir = when {
+                        abi.contains("arm64") || abi.contains("aarch64") -> "arm64-v8a"
+                        abi.contains("armeabi") || abi.contains("arm") -> "armeabi-v7a"
+                        abi.contains("x86_64") -> "x86_64"
+                        else -> "x86"
                     }
+                    val assetPath = "bin/$assetAbiDir/proot"
+                    context.assets.open(assetPath).use { input ->
+                        prootFile.parentFile?.mkdirs()
+                        FileOutputStream(prootFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    Os.chmod(prootFile.absolutePath, 448) // 700
                 }
 
                 state = InitState.Ready
@@ -264,7 +277,8 @@ fun checkEnvironment(): Boolean {
         }
         is InitState.Downloading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                LinearProgressIndicator(progress = { s.progress })
+                // 使用 Float 参数兼容性更好
+                LinearProgressIndicator(progress = s.progress)
                 Text("Downloading bootstrap: ${(s.progress * 100).toInt()}%", Modifier.padding(top = 16.dp))
             }
         }
@@ -280,77 +294,6 @@ fun checkEnvironment(): Boolean {
     return false
 }
 
-private fun downloadFile(client: OkHttpClient, url: String, outputFile: File, onProgress: (Float) -> Unit) {
-    val request = Request.Builder().url(url).build()
-    client.newCall(request).execute().use { response ->
-        val body = response.body ?: throw Exception("Download failed: $url")
-        val totalSize = body.contentLength()
-        body.byteStream().use { input ->
-            FileOutputStream(outputFile).use { output ->
-                val buffer = ByteArray(8192)
-                var read: Int
-                var downloaded = 0L
-                while (input.read(buffer).also { read = it } != -1) {
-                    output.write(buffer, 0, read)
-                    downloaded += read
-                    onProgress(if (totalSize > 0) downloaded.toFloat() / totalSize else 0f)
-                }
-            }
-        }
-    }
-}
-
-private fun extractFromDeb(debFile: File, targetDir: File, filterPrefixes: List<String>) {
-    debFile.inputStream().use { fis ->
-        BufferedInputStream(fis).use { bis ->
-            ArArchiveInputStream(bis).use { ais ->
-                var entry = ais.nextArEntry
-                while (entry != null) {
-                    if (entry.name == "data.tar.xz") {
-                        XZCompressorInputStream(ais).use { xzis ->
-                            TarArchiveInputStream(xzis).use { tais ->
-                                var tarEntry = tais.nextTarEntry
-                                while (tarEntry != null) {
-                                    val fullName = tarEntry.name.removePrefix("./").removePrefix("data/data/com.termux/files/usr/")
-                                    
-                                    val match = filterPrefixes.any { fullName.startsWith(it) }
-                                    if (match) {
-                                        val outFile = File(targetDir, fullName)
-                                        if (tarEntry.isDirectory) {
-                                            outFile.mkdirs()
-                                        } else if (tarEntry.isSymbolicLink) {
-                                            // 处理 tar 内部的软链接 (例如 libtalloc.so -> libtalloc.so.2.4.3)
-                                            outFile.parentFile?.mkdirs()
-                                            try {
-                                                if (outFile.exists()) outFile.delete()
-                                                Os.symlink(tarEntry.linkName, outFile.absolutePath)
-                                            } catch (e: Exception) {
-                                                android.util.Log.e("Tide", "Failed to create deb symlink: ${tarEntry.linkName} -> ${outFile.absolutePath}", e)
-                                            }
-                                        } else {
-                                            outFile.parentFile?.mkdirs()
-                                            FileOutputStream(outFile).use { fos ->
-                                                tais.copyTo(fos)
-                                            }
-                                            // 如果在 bin 或 lib 中，设置执行权限
-                                            if (fullName.startsWith("bin/") || fullName.contains("/lib/")) {
-                                                Os.chmod(outFile.absolutePath, 448) // 700
-                                            }
-                                        }
-                                    }
-                                    tarEntry = tais.nextTarEntry
-                                }
-                            }
-                        }
-                        break
-                    }
-                    entry = ais.nextArEntry
-                }
-            }
-        }
-    }
-}
-
 private fun unzip(zipFile: File, targetDir: File) {
     ZipInputStream(zipFile.inputStream()).use { zis ->
         var entry: ZipEntry? = zis.nextEntry
@@ -363,6 +306,7 @@ private fun unzip(zipFile: File, targetDir: File) {
                 FileOutputStream(file).use { fos ->
                     zis.copyTo(fos)
                 }
+                // 设置执行权限
                 if (file.path.contains("/bin/") || file.path.contains("/lib/") || file.path.contains("/libexec/")) {
                     try {
                         Os.chmod(file.absolutePath, OsConstants.S_IRWXU)
@@ -375,7 +319,8 @@ private fun unzip(zipFile: File, targetDir: File) {
             entry = zis.nextEntry
         }
     }
-    
+
+    // 处理软链接
     val symlinksFile = File(targetDir, "SYMLINKS.txt")
     if (symlinksFile.exists()) {
         symlinksFile.readLines().forEach { line ->
@@ -387,10 +332,13 @@ private fun unzip(zipFile: File, targetDir: File) {
                 try {
                     val linkFile = File(targetDir, link)
                     linkFile.parentFile?.mkdirs()
+
                     if (linkFile.exists() || linkFile.canonicalFile.exists()) {
                         linkFile.delete()
                     }
+
                     Os.symlink(target, linkFile.absolutePath)
+
                 } catch (e: Exception) {
                     android.util.Log.e("Tide", "Failed to create symlink: $link -> $target", e)
                 }
@@ -413,30 +361,10 @@ fun FileMenu(){
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
-            DropdownMenuItem(
-                text = {Text("New Project")},
-                onClick = {
-                    expanded = false
-                }
-            )
-            DropdownMenuItem(
-                text = {Text("Open...")},
-                onClick = {
-                    expanded = false
-                }
-            )
-            DropdownMenuItem(
-                text = {Text("Settings...")},
-                onClick = {
-                    expanded = false
-                }
-            )
-            DropdownMenuItem(
-                text = {Text("Save")},
-                onClick = {
-                    expanded = false
-                }
-            )
+            DropdownMenuItem(text = {Text("New Project")}, onClick = { expanded = false })
+            DropdownMenuItem(text = {Text("Open...")}, onClick = { expanded = false })
+            DropdownMenuItem(text = {Text("Settings...")}, onClick = { expanded = false })
+            DropdownMenuItem(text = {Text("Save")}, onClick = { expanded = false })
         }
     }
 }
@@ -453,36 +381,19 @@ fun Terminal(modifier: Modifier = Modifier, viewModel: TerminalViewModel = viewM
     val terminalBgColorInt = tintedDarkBg.toArgb()
 
     val terminalSession = remember {
-        val TERMUX_OFFICIAL_PREFIX = "/data/data/com.termux/files/usr"
-        val TERMUX_OFFICIAL_HOME = "/data/data/com.termux/files/home"
-
-        val command = "$PREFIX/bin/proot"
-        val args = arrayOf(
-            "-0",
-            "-b", "$PREFIX:$TERMUX_OFFICIAL_PREFIX",
-            "-b", "$HOME:$TERMUX_OFFICIAL_HOME",
-            "-b", "/dev",
-            "-b", "/proc",
-            "-b", "/sys",
-            "-w", TERMUX_OFFICIAL_HOME,
-            "$TERMUX_OFFICIAL_PREFIX/bin/sh",
-            "-l"
-        )
-
         val envs = arrayOf(
             "TERM=xterm-256color",
-            "HOME=$TERMUX_OFFICIAL_HOME",
-            "PREFIX=$TERMUX_OFFICIAL_PREFIX",
-            "PATH=$TERMUX_OFFICIAL_PREFIX/bin",
-            "LD_LIBRARY_PATH=$TERMUX_OFFICIAL_PREFIX/lib",
-            "PROOT_TMP_DIR=$PREFIX/tmp",
+            "HOME=$HOME",
+            "PREFIX=$PREFIX",
+            "LD_LIBRARY_PATH=$PREFIX/lib",
+            "PATH=$PREFIX/bin:$PREFIX/bin/applets",
             "LANG=en_US.UTF-8"
         )
-        
+
         viewModel.getOrCreateSession(
-            command,
+            "$PREFIX/bin/sh",
             HOME,
-            args,
+            null, // args 适配 ViewModel
             envs,
             object : TerminalSessionClient {
                 override fun onTextChanged(changedSession: TerminalSession) {
@@ -516,6 +427,7 @@ fun Terminal(modifier: Modifier = Modifier, viewModel: TerminalViewModel = viewM
                 TerminalView(ctx, null).apply {
                     terminalViewRef = this
                     setBackgroundColor(terminalBgColorInt)
+                    keepScreenOn = true
                     isFocusable = true
                     isFocusableInTouchMode = true
                     isClickable = true
@@ -586,7 +498,10 @@ fun Terminal(modifier: Modifier = Modifier, viewModel: TerminalViewModel = viewM
 
                     post {
                         try {
-                            val customTypeface = Typeface.createFromAsset(ctx.assets, "fonts/JetBrainsMono-Regular.ttf")
+                            val customTypeface = Typeface.createFromAsset(
+                                ctx.assets,
+                                "fonts/JetBrainsMono-Regular.ttf"
+                            )
                             setTypeface(customTypeface)
                         } catch (e: Exception) {
                             setTypeface(Typeface.MONOSPACE)
