@@ -19,10 +19,18 @@ API_LEVEL=21
 TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
 
 case $ABI in
-    "arm64-v8a")   TARGET_TRIPLE=aarch64-linux-android ;;
-    "armeabi-v7a") TARGET_TRIPLE=armv7a-linux-androideabi ;;
-    "x86_64")      TARGET_TRIPLE=x86_64-linux-android ;;
-    "x86")         TARGET_TRIPLE=i686-linux-android ;;
+    "arm64-v8a")   TARGET_TRIPLE=aarch64-linux-android
+                   OBJCOPY_FMT="elf64-aarch64"
+                   OBJCOPY_FMT_M32="elf32-littlearm" ;;
+    "armeabi-v7a") TARGET_TRIPLE=armv7a-linux-androideabi
+                   OBJCOPY_FMT="elf32-littlearm"
+                   OBJCOPY_FMT_M32="elf32-littlearm" ;;
+    "x86_64")      TARGET_TRIPLE=x86_64-linux-android
+                   OBJCOPY_FMT="elf64-x86-64"
+                   OBJCOPY_FMT_M32="elf32-i386" ;;
+    "x86")         TARGET_TRIPLE=i686-linux-android
+                   OBJCOPY_FMT="elf32-i386"
+                   OBJCOPY_FMT_M32="elf32-i386" ;;
     *) echo "Unknown ABI: $ABI"; exit 1 ;;
 esac
 
@@ -102,10 +110,41 @@ fi
 # ============================================================
 # 4. 编译 PRoot
 #
-# 命令行覆盖 CFLAGS/OBJCOPY，优先级高于 Makefile 内部赋居。
+# NDK 的 llvm-objdump 输出的格式字符串是 "elf64-little" 之类 LLVM 风格，
+# 而 llvm-objcopy --output-target 需要 GNU 风格（如 "elf64-aarch64"）。
+# 所以在 make 前直接用 sed patch GNUmakefile，
+# 把动态探测的 \$(shell objdump...) 替换为硬编码的 GNU ELF 格式名。
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
+
+# Patch GNUmakefile: 替换 objdump 格式探测为硬编码值
+# 匹配两处 \$(shell ... objdump ... loader[-m32] ...)
+# 并分别替换为 $OBJCOPY_FMT 和 $OBJCOPY_FMT_M32
+python3 - <<PYEOF
+import re, sys
+
+with open('GNUmakefile', 'r') as f:
+    content = f.read()
+
+# 匹配类似: \$(shell LANG=C \$(OBJDUMP) -f \$(firstword \$(LOADER_OBJS)) | grep ... | awk ...)
+# 注意: 不同版本可能用 LOADER_OBJS 或 LOADER_M32_OBJS
+content = re.sub(
+    r'\\\$\(shell[^)]*LOADER_M32_OBJS[^)]*\)',
+    '${OBJCOPY_FMT_M32}',
+    content
+)
+content = re.sub(
+    r'\\\$\(shell[^)]*LOADER_OBJS[^)]*\)',
+    '${OBJCOPY_FMT}',
+    content
+)
+
+with open('GNUmakefile', 'w') as f:
+    f.write(content)
+
+print('GNUmakefile patched OK')
+PYEOF
 
 PROOT_CFLAGS="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE \
     -I. -I./ \
