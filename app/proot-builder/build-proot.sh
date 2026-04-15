@@ -1,5 +1,4 @@
 #!/bin/bash
-# build-proot.sh - 完全照抄 green-green-avk 思路
 set -euo pipefail
 
 NDK_DIR=$1
@@ -47,7 +46,7 @@ OBJCOPY=$TOOLCHAIN/bin/llvm-objcopy
 OBJDUMP=$TOOLCHAIN/bin/llvm-objdump
 
 # ============================================================
-# 1. 准备 Talloc 静态库
+# 1. Talloc
 # ============================================================
 if [ ! -d "$TALLOC_DIR" ]; then
     echo "Downloading Talloc ${TALLOC_VER}..."
@@ -59,7 +58,6 @@ fi
 
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_DIR"
-
 cat > replace.h << 'REPLACE_EOF'
 #pragma once
 #include <stdio.h>
@@ -83,13 +81,12 @@ cat > replace.h << 'REPLACE_EOF'
 #define TALLOC_BUILD_VERSION_MINOR 4
 #define TALLOC_BUILD_VERSION_RELEASE 2
 REPLACE_EOF
-
 $CC -static -fPIE -O2 -c talloc.c -o talloc.o -I.
 $AR rcs libtalloc.a talloc.o
 echo "libtalloc.a built OK"
 
 # ============================================================
-# 2. 准备 PRoot 源码
+# 2. Clone PRoot
 # ============================================================
 if [ ! -d "$PROOT_SRC_DIR" ]; then
     echo "Cloning Termux PRoot..."
@@ -98,28 +95,37 @@ if [ ! -d "$PROOT_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 3. 编译 PRoot
+# 3. 【关键】打补丁 —— 必须在 make distclean 之前！
 #
-# 核心思路（完全照抄 green-green-avk/build-proot-android）：
-# 不禁用 32 位 loader，而是用 PROOT_UNBUNDLE_LOADER 让它
-# 作为独立文件输出。loader-m32 需要宿主机的 gcc -m32
-# 来编译，与交叉编译完全隔离。
+# GNUmakefile 在解析阶段会执行：
+#   $(CC) -E -dM arch.h | grep HAS_LOADER_32BIT
+# 来决定是否编译 assembly-m32.o。
+# 因此必须在 make 读取 Makefile 之前就把 arch.h 改好。
+# ============================================================
+echo "Patching arch.h to disable 32-bit loader..."
+sed -i 's/#define HAS_LOADER_32BIT true/#define HAS_LOADER_32BIT false/' \
+    "$PROOT_SRC_DIR/src/arch.h"
+
+# 验证补丁是否生效
+if grep -q 'HAS_LOADER_32BIT false' "$PROOT_SRC_DIR/src/arch.h"; then
+    echo "  [OK] arch.h patched successfully"
+else
+    echo "  [WARN] patch may not have applied, checking..."
+    grep 'HAS_LOADER_32BIT' "$PROOT_SRC_DIR/src/arch.h" || true
+fi
+
+# ============================================================
+# 4. 编译 PRoot
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
 
+# distclean 在补丁之后，不会动 arch.h
 make distclean || true
 
 echo '#define VERSION "v5.1.107-static"' > build.h
 echo '#define HAVE_PROCESS_VM 1' >> build.h
 echo '#define HAVE_SECCOMP_FILTER 1' >> build.h
-
-# loader 输出目录：和 proot 同级
-LOADER_DIR="$(pwd)"
-
-export CFLAGS="-I$TALLOC_DIR -Werror=implicit-function-declaration"
-export LDFLAGS="-static -L$TALLOC_DIR"
-export PROOT_UNBUNDLE_LOADER="$LOADER_DIR"
 
 echo "Running make..."
 make -j$(nproc) \
@@ -127,23 +133,16 @@ make -j$(nproc) \
     CPPFLAGS="-I$TALLOC_DIR -I. -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -include $TALLOC_DIR/replace.h" \
     CFLAGS="-static -fPIE -O2 $PROOT_ARCH" \
     LDFLAGS="-static -L$TALLOC_DIR" \
-    PROOT_UNBUNDLE_LOADER="$LOADER_DIR" \
     proot
 
 $STRIP proot
 
 # ============================================================
-# 4. 部署： proot 主二进制 + loader 文件
+# 5. 部署
 # ============================================================
 ASSETS_DIR="$ROOT_DIR/../../src/main/assets/bin/$ABI"
-LIBEXEC_DIR="$ASSETS_DIR/libexec/proot"
-mkdir -p "$LIBEXEC_DIR"
-
+mkdir -p "$ASSETS_DIR"
 cp proot "$ASSETS_DIR/proot"
-
-# 拷贝 loader 文件（如果存在）
-[ -f loader/loader ]    && $STRIP loader/loader    && cp loader/loader    "$LIBEXEC_DIR/loader"
-[ -f loader/loader-m32 ] && $STRIP loader/loader-m32 && cp loader/loader-m32 "$LIBEXEC_DIR/loader-m32"
 
 echo ""
 echo "==========================================================="
