@@ -19,26 +19,22 @@ STATIC_ROOT="$ROOT_DIR/static-${ABI}"
 PROOT_SRC_DIR="$ROOT_DIR/proot-src"
 
 # ============================================================
-# 工具链设置（照抄 green-green-avk config 里的 set-arch）
+# 工具链设置
 # ============================================================
 API_LEVEL=21
 TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
 
 case $ABI in
     "arm64-v8a")
-        MARCH=aarch64
         TARGET_TRIPLE=aarch64-linux-android
         ;;
     "armeabi-v7a")
-        MARCH=armv7a
         TARGET_TRIPLE=armv7a-linux-androideabi
         ;;
     "x86_64")
-        MARCH=x86_64
         TARGET_TRIPLE=x86_64-linux-android
         ;;
     "x86")
-        MARCH=i686
         TARGET_TRIPLE=i686-linux-android
         ;;
     *)
@@ -70,14 +66,13 @@ if [ ! -d "$TALLOC_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 2. 编译 libtalloc.a（照抄 make-talloc-static.sh）
+# 2. 编译 libtalloc.a
 # ============================================================
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_SRC_DIR"
 
 make distclean || true
 
-# green-green-avk 用的 cross-answers.txt 绕过 configure 探测
 cat > cross-answers.txt << 'EOF'
 Checking uname sysname type: "Linux"
 Checking uname machine type: "dontcare"
@@ -106,6 +101,7 @@ export CFLAGS="-fPIE -O2"
     "--prefix=$STATIC_ROOT" \
     --disable-rpath \
     --disable-python \
+    --disable-tests \
     --cross-compile \
     "--cross-answers=$TALLOC_SRC_DIR/cross-answers.txt"
 
@@ -123,7 +119,7 @@ if [ ! -d "$PROOT_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 4. 编译 PRoot（照抄 make-proot.sh，不需要任何 sed 补丁）
+# 4. 编译 PRoot（不需要任何 sed 补丁）
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
