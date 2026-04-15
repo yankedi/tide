@@ -40,7 +40,6 @@ case $ABI in
 esac
 
 API_LEVEL=28
-# NDK_DIR is passed as $1
 TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
 CC=$TOOLCHAIN/bin/${TARGET_ARCH}${API_LEVEL}-clang
 AR=$TOOLCHAIN/bin/llvm-ar
@@ -59,7 +58,6 @@ fi
 
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_DIR"
-# 构造 assembly-safe 和 loader-safe 的 replace.h
 cat <<EOF > replace.h
 #pragma once
 
@@ -107,23 +105,16 @@ echo '#define VERSION "v5.1.107-static"' > build.h
 echo '#define HAVE_PROCESS_VM 1' >> build.h
 echo '#define HAVE_SECCOMP_FILTER 1' >> build.h
 
-# --- 关键：分两步走，避免宏污染系统头文件 ---
-
-# 第一步：只为 loader.c 修改源码（避开系统冲突，这是最稳妥的办法）
-# 避免使用 -Dbasename，因为它会污染所有包含 string.h 的文件
+# 修正 loader.c 中的 basename 冲突
 sed -i 's/\bbasename\b/proot_basename/g' loader/loader.c
 
-# 第二步：正常编译所有组件
-# 恢复使用 -include，通过在 replace.h 中添加卫语句来避免汇编和 loader 的冲突
 echo "Running make..."
-# 注意：loader 的编译规则在 GNUmakefile 中定义，它会使用 CFLAGS。
-# 我们通过 -DNO_LIBC_HEADER 配合 replace.h 中的 #ifndef 来保护 loader 的 freestanding 编译。
-# 禁用 HAS_LOADER_32BIT，因为 32 位编译在 NDK 28+ 中更复杂且在 arm64 上通常不是必需的
 make -j$(nproc) \
     CC="$CC" LD="$CC" AR="$AR" STRIP="$STRIP" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" \
-    CPPFLAGS="-I$TALLOC_DIR -I. -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DHAS_LOADER_32BIT=0" \
+    CPPFLAGS="-I$TALLOC_DIR -I. -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE" \
     CFLAGS="-static -fPIE -O2 $PROOT_ARCH -include $TALLOC_DIR/replace.h" \
     LDFLAGS="-static -L$TALLOC_DIR" \
+    loader32= loader32_m32= \
     proot
 
 $STRIP proot
