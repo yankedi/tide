@@ -1,5 +1,4 @@
 #!/bin/bash
-# 照抄 green-green-avk/build-proot-android
 set -euo pipefail
 
 NDK_DIR=$1
@@ -30,8 +29,6 @@ esac
 export AR="$TOOLCHAIN/bin/llvm-ar"
 export CC="$TOOLCHAIN/bin/${TARGET_TRIPLE}${API_LEVEL}-clang"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
-export OBJCOPY="$TOOLCHAIN/bin/llvm-objcopy"
-export OBJDUMP="$TOOLCHAIN/bin/llvm-objdump"
 
 mkdir -p "$STATIC_ROOT/lib" "$STATIC_ROOT/include"
 
@@ -47,11 +44,36 @@ if [ ! -d "$TALLOC_SRC_DIR" ]; then
 fi
 
 # ============================================================
-# 2. 手动编译 talloc.c 一个文件，完全绕开 waf / configure / 测试
-# talloc.c 是自包含的，只需要 -I. 就能独立编译
+# 2. 手动编译 talloc.c
+# replace.h 是 waf 生成的，不在源码里。
+# 自己写一个最小 replace.h 满足 talloc.c 的需求即可。
 # ============================================================
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_SRC_DIR"
+
+cat > replace.h << 'EOF'
+#pragma once
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdarg.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#ifndef MIN
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#endif
+#ifndef MAX
+#define MAX(a,b) ((a)>(b)?(a):(b))
+#endif
+#define HAVE_VA_COPY 1
+#define HAVE_CONSTRUCTOR_ATTRIBUTE 1
+#define HAVE_DESTRUCTOR_ATTRIBUTE 1
+#define PRINTF_ATTRIBUTE(a,b) __attribute__((format(printf,a,b)))
+#define _PUBLIC_
+EOF
 
 "$CC" \
     -fPIE -O2 \
