@@ -16,11 +16,22 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build PRoot
         run: |
           chmod +x app/proot-builder/build-proot.sh
           ./app/proot-builder/build-proot.sh $ANDROID_NDK_LATEST_HOME ${{ matrix.abi }}
+
+      - name: Commit proot binary to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/bin/${{ matrix.abi }}/proot
+          git diff --cached --quiet && echo "No changes" || git commit -m "ci: update proot binary (${{ matrix.abi }})"
+          git pull --rebase origin master
+          git push origin HEAD:master
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
