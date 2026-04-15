@@ -181,7 +181,7 @@ make distclean || true
 echo "Running make..."
 make V=1 -j$(nproc) proot \
     CFLAGS="$PROOT_CFLAGS" \
-    LDFLAGS="-L$STATIC_ROOT/lib" \
+    LDFLAGS="-L$STATIC_ROOT/lib -ltalloc" \
     OBJCOPY="$OBJCOPY" \
     OBJDUMP="$OBJDUMP"
 
