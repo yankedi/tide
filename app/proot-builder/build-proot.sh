@@ -45,8 +45,6 @@ fi
 
 # ============================================================
 # 2. 手动编译 talloc.c
-# replace.h 是 waf 生成的，不在源码里。
-# 自己写一个最小 replace.h 满足 talloc.c 的需求即可。
 # ============================================================
 echo "Building libtalloc.a for $ABI..."
 cd "$TALLOC_SRC_DIR"
@@ -100,11 +98,13 @@ fi
 
 # ============================================================
 # 4. 编译 PRoot
+# 去掉 -Werror=implicit-function-declaration：
+# proot 源码（ashmem_memfd.c 等）缺少部分 #include，NDK r27 严格模式下会报错
 # ============================================================
 echo "Building proot for $ABI..."
 cd "$PROOT_SRC_DIR/src"
 
-export CFLAGS="-I$STATIC_ROOT/include -Werror=implicit-function-declaration"
+export CFLAGS="-I$STATIC_ROOT/include"
 export LDFLAGS="-L$STATIC_ROOT/lib"
 
 make distclean || true
