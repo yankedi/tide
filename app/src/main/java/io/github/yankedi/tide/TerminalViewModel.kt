@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
-import java.io.File
 
 class TerminalViewModel(application: Application) : AndroidViewModel(application) {
     var session: TerminalSession? = null
@@ -105,7 +104,10 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
         val data = (command + "\n").toByteArray()
         session?.write(data, 0, data.size)
     }
-
+    fun killTerminal() {
+        session?.finishIfRunning()
+        session = null
+    }
     override fun onCleared() {
         super.onCleared()
         session?.finishIfRunning()

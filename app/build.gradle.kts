@@ -15,6 +15,7 @@ android {
     defaultConfig {
         applicationId = "io.github.yankedi.tide"
         minSdk = 24
+        //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
         versionCode = 1
         versionName = "1.0"
@@ -158,6 +159,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.androidx.compose.runtime)
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
